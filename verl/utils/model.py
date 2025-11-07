@@ -41,6 +41,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from verl.models.registry import ModelRegistry
 from verl.utils.import_utils import is_trl_available
+from verl.utils.device import get_attention_implementation
 
 
 class LambdaLayer(nn.Module):
@@ -624,7 +625,7 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
             pretrained_model_name_or_path=local_path,
             torch_dtype=torch_dtype,
             config=model_config,
-            attn_implementation="flash_attention_2",
+            attn_implementation=get_attention_implementation(),
             trust_remote_code=trust_remote_code,
         )
         return model
@@ -646,7 +647,7 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
         pretrained_model_name_or_path=local_path,
         torch_dtype=torch_dtype,
         config=model_config,
-        attn_implementation="flash_attention_2",
+        attn_implementation=get_attention_implementation(),
         trust_remote_code=trust_remote_code,
     )
     model = AutoModelForCausalLMWithValueHead.from_pretrained(ori_model)

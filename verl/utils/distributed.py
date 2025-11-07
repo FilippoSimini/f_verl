@@ -38,7 +38,7 @@ def set_numa_affinity():
 
         pynvml.nvmlInit()
         initialized = True
-        device_name = "NPU" if is_npu_available else "GPU"
+        device_name = "XPU" if is_xpu_available else ("NPU" if is_npu_available else "GPU")
         local_rank = int(ray.get_runtime_context().get_accelerator_ids()[device_name][0])
         handle = pynvml.nvmlDeviceGetHandleByIndex(local_rank)
         pynvml.nvmlDeviceSetCpuAffinity(handle)

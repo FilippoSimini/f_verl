@@ -27,6 +27,14 @@ custom_chat_template: null
 # whether to use external libs for the model
 external_lib: null
 
+# Attention implementation to use. Options: "flash_attention_2", "sdpa", "eager"
+# If null, will auto-select based on device type:
+# - CUDA: "flash_attention_2" 
+# - Intel XPU: "sdpa"
+# - NPU: "sdpa"
+# - CPU: "eager"
+attn_implementation: null
+
 # override hf config
 override_config: {}
 

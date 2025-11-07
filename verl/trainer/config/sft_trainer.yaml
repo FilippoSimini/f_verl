@@ -33,6 +33,14 @@ data:
 model:
   partial_pretrain: ~/models/gemma-1.1-7b-it
   use_shm: False
+  # Attention implementation to use. Options: "flash_attention_2", "sdpa", "eager"
+  # If null, will auto-select based on current device type:
+  # - CUDA: "flash_attention_2"
+  # - Intel XPU: "sdpa"
+  # - NPU: "sdpa"
+  # - CPU: "eager"
+  attn_implementation: null
+
   fsdp_config:
     model_dtype: fp32
     wrap_policy:

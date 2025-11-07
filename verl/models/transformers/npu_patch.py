@@ -27,6 +27,7 @@ from transformers.models.qwen2_5_vl import modeling_qwen2_5_vl
 from transformers.models.qwen3 import modeling_qwen3
 from transformers.models.qwen3_moe import modeling_qwen3_moe
 from transformers.utils import logging
+from verl.utils.device import get_attention_implementation
 
 logger = logging.get_logger(__name__)
 
@@ -189,7 +190,7 @@ def _check_and_enable_flash_attn_2(
         )
 
     if not hard_check_only:
-        config._attn_implementation = "flash_attention_2"
+        config._attn_implementation = get_attention_implementation()
     logger.info("Detect using FlashAttention2 on Ascend NPU.")
     return config
 

@@ -49,7 +49,13 @@ from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path, get_
 from verl.utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
 from verl.utils.dataset import SFTDataset
 from verl.utils.dataset.multiturn_sft_dataset import MultiTurnSFTDataset
-from verl.utils.device import get_device_id, get_device_name, is_cuda_available, is_npu_available
+from verl.utils.device import (
+    get_device_id,
+    get_device_name,
+    is_cuda_available,
+    is_npu_available,
+    get_attention_implementation,
+)
 from verl.utils.distributed import destroy_global_process_group, initialize_global_process_group
 from verl.utils.fs import copy_to_local
 from verl.utils.fsdp_utils import (
@@ -234,7 +240,7 @@ class FSDPSFTTrainer:
                 local_model_path,
                 config=config,
                 torch_dtype=torch_dtype,
-                attn_implementation="flash_attention_2",
+                model_implementation=get_attention_implementation(),
                 trust_remote_code=trust_remote_code,
             )
 

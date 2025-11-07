@@ -23,6 +23,7 @@ from verl.utils import hf_processor, hf_tokenizer
 from verl.utils.fs import copy_to_local
 from verl.utils.import_utils import import_external_libs
 from verl.utils.model import get_generation_config, update_model_config
+from verl.utils.device import get_attention_implementation
 
 __all__ = ["HFModelConfig"]
 
@@ -88,6 +89,10 @@ class HFModelConfig(BaseConfig):
     use_fused_kernels: bool = False
     fused_kernel_options: dict = field(default_factory=dict)
 
+    # Attention implementation to use (e.g., "flash_attention_2", "sdpa", "eager")
+    # If None, will auto-select based on device type
+    attn_implementation: Optional[str] = None
+
     architectures: Optional[list[str]] = None
 
     def __post_init__(self):
@@ -118,7 +123,12 @@ class HFModelConfig(BaseConfig):
         )
 
         # constuct hf_config
-        attn_implementation = self.override_config.get("attn_implementation", "flash_attention_2")
+        # Use attn_implementation from the field if set, otherwise from override_config, otherwise auto-detect
+        if self.attn_implementation is not None:
+            attn_implementation = self.attn_implementation
+        else:
+            attn_implementation = self.override_config.get("attn_implementation", get_attention_implementation())
+        
         self.hf_config = AutoConfig.from_pretrained(
             self.local_hf_config_path, trust_remote_code=self.trust_remote_code, attn_implementation=attn_implementation
         )

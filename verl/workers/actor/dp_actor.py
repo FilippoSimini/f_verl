@@ -19,6 +19,7 @@ Single Process Actor
 
 import logging
 import os
+import contextlib
 
 import torch
 from torch import nn
@@ -38,6 +39,7 @@ from verl.utils.torch_functional import logprobs_from_logits
 from verl.utils.ulysses import gather_outputs_and_unpad, ulysses_pad, ulysses_pad_and_slice_inputs
 from verl.workers.actor import BasePPOActor
 from verl.workers.config import ActorConfig
+from verl.trainer.debug import _log_nonfinite, save_debug_states
 
 __all__ = ["DataParallelPPOActor"]
 
@@ -83,6 +85,36 @@ class DataParallelPPOActor(BasePPOActor):
         )
         self.device_name = get_device_name()
 
+        # Debug/diagnostic controls
+        self.debug_finite_checks = True #False
+        self.debug_finite_fail = True #False
+        self.debug_disable_autocast = False
+
+    def _finite_check(self, name, obj, batch_ctx=None):
+        if not self.debug_finite_checks:
+            return False
+        # rank-aware logging to reduce noise
+        try:
+            rank = torch.distributed.get_rank()
+        except Exception:
+            rank = 0
+        if rank != 0:
+            return False
+        detected = _log_nonfinite(name, obj)
+        if detected and self.debug_finite_fail and self.actor_optimizer is not None:
+            try:
+                save_debug_states(
+                    batch_ctx if isinstance(batch_ctx, dict) else {},
+                    self.actor_module,
+                    self.actor_optimizer,
+                    prefix="bad_actor_finite",
+                    exit_after_save=True,
+                )
+            except Exception:
+                # Best-effort: do not raise inside training loop
+                pass
+        return detected
+
     def _forward_micro_batch(
         self, micro_batch, temperature, calculate_entropy=False
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -98,11 +130,29 @@ class DataParallelPPOActor(BasePPOActor):
 
             multi_modal_inputs = extract_multi_modal_inputs(micro_batch["multi_modal_inputs"])
 
-        with torch.autocast(device_type=self.device_name, dtype=torch.bfloat16):
-            input_ids = micro_batch["input_ids"]
+        # Inputs
+        input_ids = micro_batch["input_ids"]
+        attention_mask = micro_batch["attention_mask"]
+        position_ids = micro_batch["position_ids"]
+        self._finite_check(
+            "actor/inputs",
+            {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+                "responses": micro_batch.get("responses", None),
+            },
+            batch_ctx=micro_batch,
+        )
+
+        autocast_ctx = (
+            torch.autocast(device_type=self.device_name, dtype=torch.bfloat16)
+            if not self.debug_disable_autocast
+            else contextlib.nullcontext()
+        )
+
+        with autocast_ctx:
             batch_size, seqlen = input_ids.shape
-            attention_mask = micro_batch["attention_mask"]
-            position_ids = micro_batch["position_ids"]
             entropy = None
             if position_ids.dim() == 3:  # qwen2vl mrope
                 position_ids = position_ids.transpose(0, 1)  # (bsz, 4, seqlen) -> (4, bsz, seqlen)
@@ -134,6 +184,15 @@ class DataParallelPPOActor(BasePPOActor):
 
                 # for compute the log_prob
                 input_ids_rmpad_rolled = torch.roll(input_ids_rmpad, shifts=-1, dims=1)  # (1, total_nnz)
+                self._finite_check(
+                    "actor/rmpad/labels",
+                    {
+                        "input_ids_rmpad": input_ids_rmpad,
+                        "input_ids_rmpad_rolled": input_ids_rmpad_rolled,
+                        "position_ids_rmpad": position_ids_rmpad,
+                    },
+                    batch_ctx=micro_batch,
+                )
 
                 # pad and slice the inputs if sp > 1
                 if self.use_ulysses_sp:
@@ -179,11 +238,14 @@ class DataParallelPPOActor(BasePPOActor):
                 if self.use_fused_kernels:
                     log_probs = output.log_probs.squeeze(0)  # (total_nnz,)
                     entropy_rmpad = output.entropy.squeeze(0)  # (total_nnz,)
+                    self._finite_check("actor/rmpad/log_probs_fused", log_probs, batch_ctx=micro_batch)
+                    if calculate_entropy:
+                        self._finite_check("actor/rmpad/entropy_fused", entropy_rmpad, batch_ctx=micro_batch)
 
                 else:
                     logits_rmpad = output.logits.squeeze(0)  # (total_nnz, vocab_size)
                     logits_rmpad.div_(temperature)
-
+                    self._finite_check("actor/rmpad/logits", logits_rmpad, batch_ctx=micro_batch)
                     # if use_sp: ((total_nnz / sp) + pad) ; if not use_sp: (batch, seqlen)
                     inplace_backward = True
                     if calculate_entropy:
@@ -193,6 +255,7 @@ class DataParallelPPOActor(BasePPOActor):
                         labels=input_ids_rmpad_rolled,
                         inplace_backward=inplace_backward,
                     )
+                    self._finite_check("actor/rmpad/log_probs", log_probs, batch_ctx=micro_batch)
 
                     # compute entropy
                     if calculate_entropy:
@@ -202,6 +265,7 @@ class DataParallelPPOActor(BasePPOActor):
                             entropy_rmpad = torch.utils.checkpoint.checkpoint(
                                 self.compute_entropy_from_logits, logits_rmpad
                             )
+                        self._finite_check("actor/rmpad/entropy", entropy_rmpad, batch_ctx=micro_batch)
 
                 # gather log_prob if sp > 1
                 if self.use_ulysses_sp:
@@ -237,7 +301,9 @@ class DataParallelPPOActor(BasePPOActor):
                 # only return response part:
                 if calculate_entropy:
                     entropy = full_entropy.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
+                    self._finite_check("actor/rmpad/entropy_slice", entropy, batch_ctx=micro_batch)
                 log_probs = full_log_probs.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
+                self._finite_check("actor/rmpad/log_probs_slice", log_probs, batch_ctx=micro_batch)
 
             else:  # not using rmpad and no ulysses sp
                 extra_args = {}
@@ -245,6 +311,11 @@ class DataParallelPPOActor(BasePPOActor):
                     extra_args["temperature"] = temperature
                     extra_args["return_dict"] = True
 
+                torch.set_printoptions(threshold=1000, edgeitems=2) 
+                print(f"\n~~~~~~~ input_ids finite? {torch.isfinite(input_ids).all()}\n\t{input_ids}\n\t{len(torch.unique(torch.flatten(input_ids)))}")
+                print(f"\n~~~~~~~ position_ids finite? {torch.isfinite(position_ids).all()}\n\t{position_ids}\n")
+                print(f"\n~~~~~~~ multi_modal_inputs {multi_modal_inputs}\n")
+                print(f"\n~~~~~~~ extra_args {extra_args}\n")
                 output = self.actor_module(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -257,18 +328,29 @@ class DataParallelPPOActor(BasePPOActor):
                 if self.use_fused_kernels:
                     log_probs = output.log_probs[:, -response_length - 1 : -1]
                     entropy = output.entropy[:, -response_length - 1 : -1]  # (bsz, response_length)
+                    self._finite_check("actor/nonrmpad/log_probs_fused", log_probs, batch_ctx=micro_batch)
+                    if calculate_entropy:
+                        self._finite_check("actor/nonrmpad/entropy_fused", entropy, batch_ctx=micro_batch)
 
                 else:
                     logits = output.logits
 
+                    print(f"\n~~~~~~~ logits finite? {torch.isfinite(logits).all()}\n")
                     logits.div_(temperature)
+                    print(f"\n~~~~~~~ logits.div finite? {torch.isfinite(logits).all()}\n")
                     logits = logits[:, -response_length - 1 : -1, :]  # (bsz, response_length, vocab_size)
-                    log_probs = logprobs_from_logits(logits, micro_batch["responses"])
+                    print(f"DEBUG: actor/nonrmpad/logits_slice dtype: {logits.dtype}, is_finite: {torch.isfinite(logits).all()}")
+                    self._finite_check("actor/nonrmpad/logits_slice", logits, batch_ctx=micro_batch)
+                    labels = micro_batch["responses"]
+                    self._finite_check("actor/nonrmpad/labels", labels, batch_ctx=micro_batch)
+                    log_probs = logprobs_from_logits(logits, labels)
+                    self._finite_check("actor/nonrmpad/log_probs", log_probs, batch_ctx=micro_batch)
                     if calculate_entropy:
                         if not self.config.entropy_checkpointing:
                             entropy = verl_F.entropy_from_logits(logits)  # (bsz, response_length)
                         else:
                             entropy = torch.utils.checkpoint.checkpoint(verl_F.entropy_from_logits, logits)
+                        self._finite_check("actor/nonrmpad/entropy", entropy, batch_ctx=micro_batch)
 
             return entropy, log_probs
 
@@ -353,6 +435,11 @@ class DataParallelPPOActor(BasePPOActor):
             if calculate_entropy:
                 entropys = restore_dynamic_batch(entropys, batch_idx_list)
 
+        # Post-check combined outputs
+        self._finite_check("actor/compute/log_probs", log_probs)
+        if calculate_entropy and entropys is not None:
+            self._finite_check("actor/compute/entropy", entropys)
+
         return log_probs, entropys
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
@@ -411,6 +498,17 @@ class DataParallelPPOActor(BasePPOActor):
                     old_log_prob = model_inputs["old_log_probs"]
                     advantages = model_inputs["advantages"]
 
+                    # Pre-check consumed inputs
+                    self._finite_check(
+                        "actor/update/inputs",
+                        {
+                            "old_log_probs": old_log_prob,
+                            "advantages": advantages,
+                            "response_mask": response_mask,
+                        },
+                        batch_ctx=micro_batch.batch,
+                    )
+
                     entropy_coeff = self.config.entropy_coeff
                     loss_agg_mode = self.config.loss_agg_mode
 
@@ -435,6 +533,10 @@ class DataParallelPPOActor(BasePPOActor):
                             old_log_prob = log_prob.detach()
                         else:
                             old_log_prob = model_inputs["old_log_probs"]
+
+                    # Post-check current vs old log_probs
+                    self._finite_check("actor/update/log_prob", log_prob, batch_ctx=micro_batch.batch)
+                    self._finite_check("actor/update/old_log_probs", old_log_prob, batch_ctx=micro_batch.batch)
 
                     loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
                     # vanilla -> verl.trainer.ppo.core_algos.compute_policy_loss_vanilla
@@ -503,5 +605,10 @@ class DataParallelPPOActor(BasePPOActor):
                 grad_norm = self._optimizer_step()
                 mini_batch_metrics = {"actor/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, mini_batch_metrics)
+                # if grad_norm is not finite, dump debug states and exit
+                if not torch.isfinite(grad_norm):
+                    from verl.trainer.debug import save_debug_states
+                    # use DataProto's batch as input dict for debug
+                    save_debug_states(micro_batch.batch, self.actor_module, self.actor_optimizer, prefix="bad_actor", exit_after_save=True)
         self.actor_optimizer.zero_grad()
         return metrics

@@ -257,5 +257,8 @@ class DataParallelPPOCritic(BasePPOCritic):
                 grad_norm = self._optimizer_step()
                 mini_batch_metrics = {"critic/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, mini_batch_metrics)
+                if not torch.isfinite(grad_norm): #NOTE debug
+                    from verl.trainer.debug import save_debug_states #NOTE debug
+                    save_debug_states(micro_batch.batch, self.critic_module, self.critic_optimizer, prefix="bad_critic", exit_after_save=True) #NOTE debug
         self.critic_optimizer.zero_grad()
         return metrics

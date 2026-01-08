@@ -499,6 +499,8 @@ class FSDPSFTTrainer:
         # if grad_norm is not finite, skip the update
         if not torch.isfinite(grad_norm):
             print(f"WARN: grad_norm is not finite: {grad_norm}")
+            from verl.trainer.debug import save_debug_states #NOTE debug
+            save_debug_states(batch, self.fsdp_model, self.optimizer, prefix="bad", exit_after_save=True) #NOTE debug
             self.optimizer.zero_grad()
         else:
             self.optimizer.step()

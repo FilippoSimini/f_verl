@@ -1,8 +1,9 @@
 #!/bin/bash
 
-export WORKING_DIR=$(realpath)
+export WORKING_DIR=$(realpath .)
 export VERL_VENV_PATH=${WORKING_DIR}/venv
 export VERL_REPO_PATH=${WORKING_DIR}/f_verl
+export DATA_MODEL_PATH=${WORKING_DIR}
 
 module load frameworks
 
@@ -33,13 +34,13 @@ fi
 
 
 # run verl
-git switch debug
+cd "${VERL_REPO_PATH}" && git switch debug && cd "${WORKING_DIR}"
 echo "Running ${VERL_REPO_PATH}/aurora/verl_demo_xpu.sh"
-echo "================================================="
+echo "==============================================================================="
 ${VERL_REPO_PATH}/aurora/verl_demo_xpu.sh
 
 # run reproducer
 echo "Running nan reporducer ${VERL_REPO_PATH}/aurora/run_reproducer_nan_xpu.sh"
-echo "========================================================================="
+echo "========================================================================================="
 ${VERL_REPO_PATH}/aurora/run_reproducer_nan_xpu.sh
 

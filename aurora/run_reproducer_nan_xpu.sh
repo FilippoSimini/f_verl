@@ -86,5 +86,5 @@ echo "Using optimizer state: ${BAD_OPTIM}"
 echo "Model path: ${MODEL_PATH}"
 
 # Launch the reproducer script with torchrun for distributed FSDP on XPU
-torchrun --nproc_per_node=2 reproducer_nan_xpu.py \
+torchrun --nproc_per_node=2 ${VERL_REPO_PATH}/aurora/reproducer_nan_xpu.py \
     ${BAD_INPUT} ${BAD_MODEL} ${BAD_OPTIM} ${MODEL_PATH}

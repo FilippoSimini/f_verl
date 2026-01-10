@@ -95,16 +95,18 @@ mkdir -p "${DATA_MODEL_PATH}"
 if [ -f "${DATA_MODEL_PATH}/openai/gsm8k/train.parquet" ]; then
   echo "gsm8k dataset already present at ${DATA_MODEL_PATH}/openai/gsm8k, skipping clone"
 else
-  git clone https://huggingface.co/datasets/openai/gsm8k "${DATA_MODEL_PATH}/openai/gsm8k"
-  wget -O "${DATA_MODEL_PATH}/openai/gsm8k/gsm8k.py" https://raw.githubusercontent.com/volcengine/verl/main/examples/data_preprocess/gsm8k.py
-  python3 "${DATA_MODEL_PATH}/openai/gsm8k/gsm8k.py" --local_save_dir "${DATA_MODEL_PATH}/openai/gsm8k"
+  #git clone https://huggingface.co/datasets/openai/gsm8k "${DATA_MODEL_PATH}/openai/gsm8k"
+  hf download openai/gsm8k --repo-type=dataset --local-dir="${DATA_MODEL_PATH}/openai/gsm8k"
+  wget -O "${DATA_MODEL_PATH}/gsm8k.py" https://raw.githubusercontent.com/volcengine/verl/main/examples/data_preprocess/gsm8k.py
+  python3 "${DATA_MODEL_PATH}/gsm8k.py" --local_dataset_path "${DATA_MODEL_PATH}/openai/gsm8k" --local_save_dir "${DATA_MODEL_PATH}/openai/gsm8k"
 fi
 
 # Qwen model
 if [ -d "${DATA_MODEL_PATH}/Qwen/Qwen2.5-0.5B-Instruct" ]; then
   echo "Qwen2.5-0.5B-Instruct already present at ${DATA_MODEL_PATH}/Qwen/Qwen2.5-0.5B-Instruct, skipping clone"
 else
-  git clone https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct "${DATA_MODEL_PATH}/Qwen/Qwen2.5-0.5B-Instruct"
+  #git clone https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct "${DATA_MODEL_PATH}/Qwen/Qwen2.5-0.5B-Instruct"
+  hf download Qwen/Qwen2.5-0.5B-Instruct --repo-type=model --local-dir="${DATA_MODEL_PATH}/Qwen/Qwen2.5-0.5B-Instruct"
 fi
 
 export PRECISION=bf16
